@@ -4,6 +4,33 @@ A Node.js CLI tool to preview and download files from intelx.io.
 
 ![Main Menu](images/menu.png)
 
+## Features
+
+- **Interactive menu** for **searching**, setting **API key**, and viewing **API limits**
+- **File previewing** - Browse through search results with context highlighting, pagination, and quick downloading options
+- **Multiple download modes**:
+  - Preview files with search term context
+  - Download all files from a search result
+  - View and download entire file tree of a specific record (zip file)
+- **Multiple record selection** when search returns multiple results
+
+## Screenshots
+
+### File Previewing
+Browse through search results with highlighted context around your search term. Navigate between files, download individual files, or return to the menu.
+
+![File Preview](images/preview.png)
+
+### API Limits Display
+Monitor your API credit usage with a detailed table showing current usage, limits, percentages, reset times, and visual progress bars.
+
+![API Limits](images/api-limits.png)
+
+### File Selection
+Select multiple files from search results or file trees using an interactive checkbox interface. Supports "Select All" and individual file selection.
+
+![File Selection](images/files.png)
+
 ## Setup
 
 1. Clone the repository:
@@ -80,36 +107,3 @@ node index.js 1d69f42e-3e31-46cc-a349-0870d07b3b61
 # Custom output filename
 node index.js example@email.com -o my-download.zip
 ```
-
-## Features
-
-- **Persistent interactive menu** - The main menu loops continuously, allowing you to perform multiple operations without restarting the program
-- **Interactive menu** for searching, setting API key, and viewing API limits
-- **Automatic `.env` file creation** and API key management
-- **File preview mode** - Browse through search results with context highlighting, pagination, and quick download options
-- **Multiple download modes**:
-  - Preview files with search term context
-  - Download files directly from search results
-  - View and download from file tree structure
-- **Automatic file tree parsing** and selection
-- **Multiple record selection** when search returns multiple results
-- **Downloads selected files** and creates a zip archive with preserved folder structure
-- **API limits display** showing credit usage and reset times with visual progress bars
-- **Navigation** - "Back to menu" option returns you to the main menu from any operation
-
-## Screenshots
-
-### File Preview Mode
-Browse through search results with highlighted context around your search term. Navigate between files, download individual files, or return to the menu.
-
-![File Preview](images/preview.png)
-
-### API Limits Display
-Monitor your API credit usage with a detailed table showing current usage, limits, percentages, reset times, and visual progress bars.
-
-![API Limits](images/api-limits.png)
-
-### File Selection
-Select multiple files from search results or file trees using an interactive checkbox interface. Supports "Select All" and individual file selection.
-
-![File Selection](images/files.png)
