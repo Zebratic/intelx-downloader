@@ -219,6 +219,11 @@ function wrapLine(text, maxWidth) {
   return lines;
 }
 
+function normalizeSpaces(line) {
+  // Replace sequences of 3 or more spaces with exactly 3 spaces
+  return line.replace(/\s{3,}/g, '   ');
+}
+
 function formatPreview(matches, searchTerm, maxMatches = 3) {
   if (matches.length === 0) {
     return chalk.yellow('No matches found in file content.');
@@ -232,31 +237,43 @@ function formatPreview(matches, searchTerm, maxMatches = 3) {
   const displayMatches = matches.slice(0, maxMatches);
   
   for (const match of displayMatches) {
-    output += chalk.cyan(`\n--- Match at line ${match.lineNumber} ---\n`);
     for (let i = 0; i < match.context.length; i++) {
-      const line = match.context[i];
+      let line = match.context[i];
+      // Normalize spaces: replace 3+ spaces with exactly 3 spaces
+      line = normalizeSpaces(line);
       const lineNum = match.lineNumber - match.matchLine + i;
       const lineNumStr = lineNum.toString().padStart(6);
       
       if (i === match.matchLine) {
-        // Highlight the matching line
+        // Highlight the matching line - show FULL line with wrapping
         const highlighted = line.replace(
           new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
           (match) => chalk.bgYellow.black(match)
         );
         
-        // Wrap the line
+        // Wrap the line fully
         const wrapped = wrapLine(highlighted, maxLineWidth);
         for (let j = 0; j < wrapped.length; j++) {
           const prefix = j === 0 ? chalk.green(`>${lineNumStr}: `) : chalk.green(' '.repeat(lineNumWidth));
           output += prefix + wrapped[j] + '\n';
         }
       } else {
-        // Wrap regular lines
-        const wrapped = wrapLine(line, maxLineWidth);
-        for (let j = 0; j < wrapped.length; j++) {
-          const prefix = j === 0 ? chalk.gray(` ${lineNumStr}: `) : chalk.gray(' '.repeat(lineNumWidth));
-          output += prefix + wrapped[j] + '\n';
+        // Context lines - truncate if they would wrap to multiple lines
+        const lineLength = stripAnsiCodes(line).length;
+        
+        if (lineLength > maxLineWidth) {
+          // Line would wrap - truncate with "..."
+          const truncated = line.substring(0, maxLineWidth - 3);
+          // Try to truncate at a word boundary if possible
+          const lastSpace = truncated.lastIndexOf(' ');
+          const truncateAt = lastSpace > maxLineWidth * 0.7 ? lastSpace : maxLineWidth - 3;
+          const finalLine = line.substring(0, truncateAt) + chalk.gray('...');
+          const prefix = chalk.gray(` ${lineNumStr}: `);
+          output += prefix + finalLine + '\n';
+        } else {
+          // Line fits in one line - show it fully
+          const prefix = chalk.gray(` ${lineNumStr}: `);
+          output += prefix + line + '\n';
         }
       }
     }
@@ -362,16 +379,16 @@ Note:
   - Files are saved to current directory by default
   - You'll be prompted to select which files to download
     `)
-    .action(async (systemId, options) => {
+    .action(async (searchTerm, options) => {
       // Main menu loop
       while (true) {
         try {
           // Show menu if no systemId provided
-          if (!systemId) {
+          if (!searchTerm) {
             const menuChoices = [
             { name: 'Search', value: 'search' },
-            { name: 'Set API Key', value: 'setkey' },
-            { name: 'API Limits', value: 'limits' }
+            { name: 'API Limits', value: 'limits' },
+            { name: 'Set API Key', value: 'setkey' }
           ];
 
           const { action } = await inquirer.prompt([
@@ -476,33 +493,33 @@ Note:
               }
             }
           ]);
-            systemId = inputSystemId.trim();
+            searchTerm = inputSystemId.trim();
           }
 
           // Check if API key is set
           if (!API_KEY) {
             console.error(chalk.red('\n✗ Error: API key not set. Please run the script without arguments and select "Set API Key" to configure it.'));
-            systemId = null; // Reset to show menu again
+            searchTerm = null; // Reset to show menu again
             continue;
           }
 
           // Use systemId as default output filename if not specified
           // Save to current working directory
-          const defaultFilename = `${systemId}.zip`;
+          const defaultFilename = `${searchTerm}.zip`;
           const outputPath = options.output 
             ? (path.isAbsolute(options.output) ? options.output : path.join(process.cwd(), options.output))
             : path.join(process.cwd(), defaultFilename);
-          console.log(chalk.cyan(`\nSearching for: ${chalk.bold.white(systemId)}`));
+          console.log(chalk.cyan(`\nSearching for: ${chalk.bold.white(searchTerm)}`));
           
           // Step 1: Search
-          const searchId = await searchBySystemId(systemId);
+          const searchId = await searchBySystemId(searchTerm);
 
           // Step 2: Get results
           const results = await getSearchResults(searchId);
           
           if (!results.records || results.records.length === 0) {
             console.error(chalk.red('✗ No records found'));
-            systemId = null; // Reset to show menu again
+            searchTerm = null; // Reset to show menu again
             continue;
           }
 
@@ -517,7 +534,8 @@ Note:
               choices: [
                 { name: 'Preview files (show context around search term)', value: 'preview' },
                 { name: 'Download files directly from results', value: 'results' },
-                { name: 'View file tree of a specific record', value: 'tree' }
+                { name: 'View file tree of a specific record', value: 'tree' },
+                { name: 'Export all system IDs for the search', value: 'export' }
               ]
             }
           ]);
@@ -550,10 +568,11 @@ Note:
               const date = record.date ? new Date(record.date).toLocaleDateString() : 'Unknown date';
               const size = record.size ? `${(record.size / 1024 / 1024).toFixed(2)} MB` : 'Unknown size';
               const bucket = record.bucketh || record.bucket || 'Unknown bucket';
+              const systemId = record.systemid || 'Unknown';
 
               console.clear();
               console.log(chalk.bold.cyan(`\nFile Preview (${currentPage + 1}/${totalPages})\n`));
-              console.log(chalk.white(`File: ${chalk.bold.yellow(fileName)}`));
+              console.log(chalk.white(`ID: ${chalk.bold.cyan(systemId)} | File: ${chalk.bold.yellow(fileName)}`));
               console.log(chalk.white(`Date: ${chalk.gray(date)} | Size: ${chalk.gray(size)} | Bucket: ${chalk.gray(bucket)}\n`));
 
               try {
@@ -562,13 +581,48 @@ Note:
                 if (preloadedContent.has(currentPage)) {
                   content = preloadedContent.get(currentPage);
                 } else {
-                  console.log(chalk.cyan('Loading file content...'));
                   content = await getFilePreview(record.storageid, record.bucket);
                   preloadedContent.set(currentPage, content);
                 }
                 
-                const matches = findContextInFile(content, systemId, 5);
-                const preview = formatPreview(matches, systemId, 3);
+                // Calculate available terminal space
+                const terminalHeight = process.stdout.rows || 24;
+                const headerLines = 4; // Title, ID/File, Date/Size/Bucket, blank line
+                const navigationLines = 6; // Menu prompt + choices (approximate, including separator)
+                const bufferLines = 3; // Extra buffer for wrapped lines and spacing
+                const availableLines = Math.max(3, terminalHeight - headerLines - navigationLines - bufferLines);
+                
+                // Adjust context lines and max matches based on available space
+                // Start with conservative defaults
+                let contextLines = 3;
+                let maxMatches = 2;
+                
+                // Calculate how many lines one match takes (contextLines * 2 + 1 for the match line)
+                // Account for potential line wrapping by using a multiplier
+                const wrappingMultiplier = 1.5; // Assume lines might wrap to 1.5x their count
+                const estimatedLinesPerMatch = Math.ceil((contextLines * 2 + 1) * wrappingMultiplier);
+                
+                // Try to fit at least one match
+                if (estimatedLinesPerMatch > availableLines) {
+                  // Reduce context to fit
+                  contextLines = Math.max(1, Math.floor((availableLines / wrappingMultiplier - 1) / 2));
+                  maxMatches = 1;
+                } else {
+                  // Calculate how many matches we can fit
+                  maxMatches = Math.max(1, Math.floor(availableLines / estimatedLinesPerMatch));
+                  
+                  // If we have more space, try to show more context or more matches
+                  if (availableLines >= 15) {
+                    contextLines = 4;
+                    maxMatches = Math.max(1, Math.floor(availableLines / Math.ceil((contextLines * 2 + 1) * wrappingMultiplier)));
+                  } else if (availableLines >= 10) {
+                    contextLines = 3;
+                    maxMatches = Math.max(1, Math.floor(availableLines / Math.ceil((contextLines * 2 + 1) * wrappingMultiplier)));
+                  }
+                }
+                
+                const matches = findContextInFile(content, searchTerm, contextLines);
+                const preview = formatPreview(matches, searchTerm, maxMatches);
                 console.log(preview);
               } catch (error) {
                 console.log(chalk.red(`Error loading preview: ${error.message}`));
@@ -633,12 +687,12 @@ Note:
                 // Continue browsing - loop will continue and show menu again
               } else if (nextAction === 'back') {
                 console.clear();
-                systemId = null; // Reset to return to main menu
+                searchTerm = null; // Reset to return to main menu
                 break;
               }
             }
             // If we broke from preview, continue to show main menu
-            if (systemId === null) {
+            if (searchTerm === null) {
               continue;
             }
           }
@@ -701,7 +755,7 @@ Note:
 
           if (filesToDownload.length === 0) {
             console.log(chalk.yellow('No files selected'));
-            systemId = null; // Reset to return to main menu
+            searchTerm = null; // Reset to return to main menu
             continue;
           }
 
@@ -733,7 +787,7 @@ Note:
             console.log(chalk.red('\n✗ No files were successfully downloaded'));
           }
 
-          systemId = null; // Reset to return to main menu
+          searchTerm = null; // Reset to return to main menu
           continue;
         }
 
@@ -793,7 +847,7 @@ Note:
 
           if (!indexFile || !bucket) {
             console.error(chalk.red('✗ Missing indexfile or bucket in results'));
-            systemId = null; // Reset to return to main menu
+            searchTerm = null; // Reset to return to main menu
             continue;
           }
 
@@ -807,7 +861,7 @@ Note:
 
           if (files.length === 0) {
             console.error(chalk.red('✗ No files found in tree'));
-            systemId = null; // Reset to return to main menu
+            searchTerm = null; // Reset to return to main menu
             continue;
           }
 
@@ -848,7 +902,7 @@ Note:
 
           if (filesToDownload.length === 0) {
             console.log(chalk.yellow('No files selected'));
-            systemId = null; // Reset to return to main menu
+            searchTerm = null; // Reset to return to main menu
             continue;
           }
 
@@ -880,16 +934,39 @@ Note:
             console.log(chalk.red('\n✗ No files were successfully downloaded'));
           }
 
-          systemId = null; // Reset to return to main menu
+          searchTerm = null; // Reset to return to main menu
           continue;
         }
-        } catch (error) {
-          console.error(chalk.red(`\n✗ Error: ${error.message}`));
-          systemId = null; // Reset to return to main menu on error
+        if (action === 'export') {
+          // Export all system IDs from search results to a text file
+          const systemIds = results.records.map(rec => rec.systemid).filter(id => id); // Filter out any undefined/null IDs
+          const exportFilename = `${searchTerm}_systemids.txt`;
+          const exportPath = path.join(process.cwd(), exportFilename);
+          
+          console.log(chalk.cyan(`\nExporting ${chalk.bold.yellow(systemIds.length)} system IDs...`));
+          
+          try {
+            const content = systemIds.join('\n');
+            await writeFile(exportPath, content, 'utf8');
+            console.log(chalk.green(`✓ Exported to ${chalk.bold.cyan(exportPath)}`));
+          } catch (error) {
+            console.error(chalk.red(`✗ Error exporting system IDs: ${error.message}`));
+          }
+          
+          searchTerm = null; // Reset to return to main menu
           continue;
         }
+
+      } catch (error) {
+        if (error && error.name === 'ExitPromptError') {
+          process.exit(0);
+        }
+        console.error(chalk.red(`\n✗ Error: ${error && error.message}`));
+        searchTerm = null; // Reset to return to main menu on error
+        continue;
       }
-    });
+    }
+  });
 
   program.configureHelp({
     showGlobalOptions: true

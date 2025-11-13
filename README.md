@@ -2,6 +2,20 @@
 
 A Node.js CLI tool to preview and download files from intelx.io.
 
+## Table of Contents
+
+- [Features](#features)
+- [Screenshots](#screenshots)
+  - [File Previewing](#file-previewing)
+  - [API Limits Display](#api-limits-display)
+  - [File Selection](#file-selection)
+- [Setup](#setup)
+  - [Optional: Add a shell alias](#optional-add-a-shell-alias-for-quick-access)
+- [Usage](#usage)
+  - [Basic Usage](#basic-usage)
+  - [Options](#options)
+  - [Examples](#examples)
+
 ![Main Menu](images/menu.png)
 
 ## Features
