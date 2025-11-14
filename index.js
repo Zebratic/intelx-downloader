@@ -157,6 +157,143 @@ async function getApiLimits() {
   return await response.json();
 }
 
+function isDomain(searchTerm) {
+  // Check if search term looks like a domain (contains a dot and possibly a TLD)
+  // Also handle URLs (http:// or https://)
+  const cleaned = searchTerm.replace(/^https?:\/\//, '').split('/')[0];
+  return /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}/.test(cleaned);
+}
+
+function extractCredentials(text, domain) {
+  const credentials = new Set(); // Use Set to avoid duplicates
+  
+  // Pattern 1: domain:username:password or domain/path:username:password
+  // Matches: danishbytes.club:pabloe:Thorlund80
+  // Matches: danishbytes.club/login/go:IGLE070996:070996dk
+  const pattern1 = new RegExp(`${domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:/[^:]*)?:([^:\\s]+):([^:\\s\\n]+)`, 'gi');
+  let match;
+  while ((match = pattern1.exec(text)) !== null) {
+    const username = match[1].trim();
+    const password = match[2].trim();
+    if (username && password && username.length > 0 && password.length > 0) {
+      credentials.add(`${username}:${password}`);
+    }
+  }
+  
+  // Pattern 2: https://domain/path|username|password or domain/path|username|password
+  // Matches: https://danishbytes.club/login/go|MiNiDK|Minimis4!
+  // Matches: danishbytes.club/login/go|USERNAME|PASSWORD
+  const pattern2 = new RegExp(`(?:https?://)?${domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:/[^|]*)?\\|([^|\\s]+)\\|([^|\\s\\n]+)`, 'gi');
+  while ((match = pattern2.exec(text)) !== null) {
+    const username = match[1].trim();
+    const password = match[2].trim();
+    if (username && password && username.length > 0 && password.length > 0) {
+      credentials.add(`${username}:${password}`);
+    }
+  }
+  
+  return Array.from(credentials);
+}
+
+async function generateCombolist(searchTerm, results, limit = null) {
+  // Extract domain name (remove protocol and path if present)
+  const domainName = searchTerm.replace(/^https?:\/\//, '').split('/')[0];
+  
+  // Limit the number of records to process
+  const recordsToProcess = limit ? results.records.slice(0, limit) : results.records;
+  const totalRecords = results.records.length;
+  const processingCount = recordsToProcess.length;
+  
+  // Check API limits before starting
+  try {
+    const limits = await getApiLimits();
+    const fileViewLimit = limits.paths?.['/file/view'];
+    
+    if (fileViewLimit && fileViewLimit.CreditMax > 0) {
+      const credits = fileViewLimit.Credit || 0;
+      if (credits === 0) {
+        console.log(chalk.red(`\n✗ API limit exhausted for /file/view endpoint`));
+        console.log(chalk.yellow(`⚠ Credits will reset in ${fileViewLimit.CreditReset || 0} hour(s)`));
+        console.log(chalk.gray(`\nCannot generate combolist without file view credits.`));
+        return;
+      }
+      
+      if (credits < processingCount) {
+        console.log(chalk.yellow(`\n⚠ Warning: You have ${chalk.bold.yellow(credits)} credit(s) remaining, but need to process ${chalk.bold.yellow(processingCount)} file(s).`));
+        console.log(chalk.yellow(`⚠ Processing will stop when credits are exhausted.`));
+      }
+    }
+  } catch (error) {
+    // If we can't check limits, continue anyway but warn
+    console.log(chalk.yellow(`\n⚠ Could not check API limits: ${error.message}`));
+  }
+  
+  console.log(chalk.cyan(`\nGenerating combolist for ${chalk.bold.yellow(domainName)}...`));
+  if (limit && limit < totalRecords) {
+    console.log(chalk.gray(`Processing ${processingCount} of ${totalRecords} record(s)...\n`));
+  } else {
+    console.log(chalk.gray(`Processing ${processingCount} record(s)...\n`));
+  }
+  
+  const allCredentials = new Set();
+  let processed = 0;
+  let errors = 0;
+  let apiExhausted = false;
+  
+  for (const record of recordsToProcess) {
+    try {
+      processed++;
+      if (processed % 10 === 0) {
+        process.stdout.write(chalk.gray(`\rProcessed ${processed}/${processingCount} files...`));
+      }
+      
+      const content = await getFilePreview(record.storageid, record.bucket);
+      const credentials = extractCredentials(content, domainName);
+      
+      credentials.forEach(cred => allCredentials.add(cred));
+    } catch (error) {
+      errors++;
+      
+      // Check if error is due to API limit exhaustion
+      if (error.message && (error.message.includes('403') || error.message.includes('429') || error.message.includes('limit'))) {
+        apiExhausted = true;
+        console.log(chalk.red(`\n\n✗ API limit exhausted while processing file ${processed}`));
+        console.log(chalk.yellow(`⚠ Stopped processing. Processed ${processed - 1} file(s) before limit was reached.`));
+        break;
+      }
+      // Continue processing other files even if one fails (unless API exhausted)
+    }
+  }
+  
+  process.stdout.write(chalk.gray(`\rProcessed ${processed}/${processingCount} files...\n`));
+  
+  if (apiExhausted && processed < processingCount) {
+    console.log(chalk.yellow(`\n⚠ API limit reached. Only ${processed - errors} file(s) were successfully processed.`));
+  }
+  
+  const credentialsArray = Array.from(allCredentials).sort();
+  
+  if (credentialsArray.length === 0) {
+    if (apiExhausted) {
+      console.log(chalk.yellow(`\n⚠ No credentials found in the processed files. This may be due to API limit exhaustion.`));
+    } else {
+      console.log(chalk.yellow(`\n⚠ No credentials found in the search results.`));
+    }
+    return;
+  }
+  
+  const outputFile = path.join(process.cwd(), `${domainName}.txt`);
+  
+  const content = credentialsArray.join('\n') + '\n';
+  await writeFile(outputFile, content, 'utf8');
+  
+  console.log(chalk.green(`\n✓ Generated combolist with ${chalk.bold.cyan(credentialsArray.length)} credential(s)`));
+  console.log(chalk.green(`✓ Saved to ${chalk.bold.cyan(outputFile)}`));
+  if (errors > 0) {
+    console.log(chalk.yellow(`⚠ ${errors} file(s) could not be processed`));
+  }
+}
+
 function findContextInFile(content, searchTerm, contextLines = 5) {
   const lines = content.split('\n');
   const matches = [];
@@ -526,17 +663,24 @@ Note:
           console.log(chalk.green(`✓ Found ${chalk.bold.yellow(results.records.length)} record(s)\n`));
 
           // Ask user how they want to proceed
+          const choices = [
+            { name: 'Preview files (show context around search term)', value: 'preview' },
+            { name: 'Download files directly from results', value: 'results' },
+            { name: 'View file tree of a specific record', value: 'tree' },
+            { name: 'Export all system IDs for the search', value: 'export' }
+          ];
+          
+          // Add combolist option if searching for a domain
+          if (isDomain(searchTerm)) {
+            choices.push({ name: 'Generate combolist (username:password)', value: 'combolist' });
+          }
+          
           const { action } = await inquirer.prompt([
             {
               type: 'list',
               name: 'action',
               message: 'What would you like to do?',
-              choices: [
-                { name: 'Preview files (show context around search term)', value: 'preview' },
-                { name: 'Download files directly from results', value: 'results' },
-                { name: 'View file tree of a specific record', value: 'tree' },
-                { name: 'Export all system IDs for the search', value: 'export' }
-              ]
+              choices: choices
             }
           ]);
 
@@ -937,6 +1081,43 @@ Note:
           searchTerm = null; // Reset to return to main menu
           continue;
         }
+        if (action === 'combolist') {
+          // Ask how many files to process
+          const { fileLimit } = await inquirer.prompt([
+            {
+              type: 'input',
+              name: 'fileLimit',
+              message: `How many files to process? (1-${results.records.length}, or press Enter for all):`,
+              default: results.records.length.toString(),
+              validate: (input) => {
+                if (!input || input.trim().length === 0) {
+                  return true; // Allow empty (means all files)
+                }
+                const num = parseInt(input.trim(), 10);
+                if (isNaN(num) || num < 1) {
+                  return 'Please enter a valid number greater than 0';
+                }
+                if (num > results.records.length) {
+                  return `Maximum is ${results.records.length} files`;
+                }
+                return true;
+              }
+            }
+          ]);
+          
+          const limit = fileLimit && fileLimit.trim() ? parseInt(fileLimit.trim(), 10) : null;
+          
+          // Generate combolist from search results
+          try {
+            await generateCombolist(searchTerm, results, limit);
+          } catch (error) {
+            console.error(chalk.red(`✗ Error generating combolist: ${error.message}`));
+          }
+          
+          searchTerm = null; // Reset to return to main menu
+          continue;
+        }
+
         if (action === 'export') {
           // Export all system IDs from search results to a text file
           const systemIds = results.records.map(rec => rec.systemid).filter(id => id); // Filter out any undefined/null IDs
